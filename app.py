@@ -146,30 +146,46 @@ if st.sidebar.button('Generate Forecast'):
                     st.error("ARIMA forecast could not be generated.")
                 
             elif model_choice == 'Prophet':
-                prophet_df_train = train_data.reset_index().rename(columns={'Date': 'ds', 'Close': 'y'})
+                prophet_df_train = train_data.reset_index().rename(
+                    columns={train_data.index.name if train_data.index.name else 'index': 'ds', 'Close': 'y'}
+                )
                 prophet_model_train = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True, interval_width=0.95)
                 prophet_model_train.fit(prophet_df_train)
 
                 future_test = prophet_model_train.make_future_dataframe(periods=len(test_data), freq='B', include_history=False)
                 forecast_test = prophet_model_train.predict(future_test)
                 test_predictions = forecast_test['yhat'].values
-                
+
                 mse = mean_squared_error(test_data['Close'], test_predictions)
                 rmse = np.sqrt(mse)
                 accuracy_metric['Prophet'] = {'MSE': mse, 'RMSE': rmse}
 
                 # Instantiate a new Prophet object for the full forecast to avoid the "fit once" error
-                prophet_df_full = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y'})
+                prophet_df_full = df.reset_index().rename(
+                    columns={df.index.name if df.index.name else 'index': 'ds', 'Close': 'y'}
+                )
                 prophet_model_full = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True, interval_width=0.95)
                 prophet_model_full.fit(prophet_df_full)
                 future_forecast = prophet_model_full.make_future_dataframe(periods=forecast_steps, freq='B')
                 forecast_future = prophet_model_full.predict(future_forecast)
-                
+
                 fig_prophet = go.Figure()
-                fig_prophet.add_trace(go.Scatter(x=forecast_future['ds'], y=forecast_future['yhat_lower'], mode='lines', name='Lower Bound', line=dict(width=0), showlegend=False))
-                fig_prophet.add_trace(go.Scatter(x=forecast_future['ds'], y=forecast_future['yhat_upper'], mode='lines', name='Upper Bound', fill='tonexty', fillcolor='rgba(152, 251, 152, 0.4)', line=dict(width=0)))
-                fig_prophet.add_trace(go.Scatter(x=prophet_df_full['ds'], y=prophet_df_full['y'], mode='lines', name='Historical Data', line=dict(color='royalblue')))
-                fig_prophet.add_trace(go.Scatter(x=forecast_future['ds'], y=forecast_future['yhat'], mode='lines', name='Prophet Forecast', line=dict(color='green', dash='dash')))
+                fig_prophet.add_trace(go.Scatter(
+                    x=forecast_future['ds'], y=forecast_future['yhat_lower'], mode='lines', name='Lower Bound',
+                    line=dict(width=0), showlegend=False
+                ))
+                fig_prophet.add_trace(go.Scatter(
+                    x=forecast_future['ds'], y=forecast_future['yhat_upper'], mode='lines', name='Upper Bound',
+                    fill='tonexty', fillcolor='rgba(152, 251, 152, 0.4)', line=dict(width=0), showlegend=False
+                ))
+                fig_prophet.add_trace(go.Scatter(
+                    x=prophet_df_full['ds'], y=prophet_df_full['y'], mode='lines', name='Historical Data',
+                    line=dict(color='royalblue')
+                ))
+                fig_prophet.add_trace(go.Scatter(
+                    x=forecast_future['ds'], y=forecast_future['yhat'], mode='lines', name='Prophet Forecast',
+                    line=dict(color='green', dash='dash')
+                ))
                 fig_prophet.update_layout(title=f'Prophet {ticker} Price Forecast', xaxis_title='Date', yaxis_title='Close Price (USD)', template='plotly_dark')
                 st.plotly_chart(fig_prophet, use_container_width=True)
 
