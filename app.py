@@ -36,8 +36,6 @@ start_date = st.sidebar.date_input('Start Date', end_date - timedelta(days=365*5
 if st.sidebar.button('Reload Data'):
     # Clear the entire cache
     st.cache_data.clear()
-    # Rerun the app from the top
-    st.experimental_rerun()
 
 @st.cache_data
 def load_data(ticker, start, end):
