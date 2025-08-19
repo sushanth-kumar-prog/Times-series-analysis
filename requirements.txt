@@ -6,3 +6,4 @@ prophet
 statsmodels
 tensorflow
 scikit-learn
+yfinance
