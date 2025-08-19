@@ -37,11 +37,7 @@ if st.sidebar.button('Reload Data'):
     # Clear the entire cache
     st.cache_data.clear()
 
-@st.cache_data
 def load_data(ticker, start, end):
-    """
-    Loads stock data from Yahoo Finance.
-    """
     try:
         data = yf.download(ticker, start=start, end=end, progress=False)
         if data.empty:
