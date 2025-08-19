@@ -39,7 +39,9 @@ if st.sidebar.button('Reload Data'):
 
 def load_data(ticker, start, end):
     try:
-        data = yf.download(ticker, start=start, end=end, progress=False)
+        # Added a user_agent to the download request to bypass potential blocks from Yahoo Finance
+        data = yf.download(ticker, start=start, end=end, progress=False,
+                           user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36")
         if data.empty:
             st.error(f"No data found for ticker: {ticker}. Please check the ticker symbol and date range.")
             return pd.DataFrame()
