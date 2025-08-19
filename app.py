@@ -24,7 +24,7 @@ st.markdown("Predict future stock prices using various time series models on any
 
 # --- Sidebar for user input ---
 st.sidebar.header("Input Parameters")
-ticker = st.sidebar.text_input('Stock Ticker', 'GOOGL').upper()
+ticker_symbol = st.sidebar.text_input('Stock Ticker', 'GOOGL').upper()
 
 # Set default date range
 today = date.today()
@@ -32,42 +32,40 @@ end_date = st.sidebar.date_input('End Date', today)
 start_date = st.sidebar.date_input('Start Date', end_date - timedelta(days=365*5))
 
 # --- Data Loading ---
-# Add this button to the sidebar to clear the cache and reload data
 if st.sidebar.button('Reload Data'):
-    # Clear the entire cache
     st.cache_data.clear()
 
-def load_data(ticker, start, end):
+# Use Ticker object instead of direct download function for more reliability
+def load_data(ticker_symbol, start, end):
     try:
-        # Added a user_agent to the download request to bypass potential blocks from Yahoo Finance
-        data = yf.download(ticker, start=start, end=end, progress=False,
-                           user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36")
+        ticker = yf.Ticker(ticker_symbol)
+        data = ticker.history(start=start, end=end)
+        
         if data.empty:
-            st.error(f"No data found for ticker: {ticker}. Please check the ticker symbol and date range.")
+            st.error(f"No data found for ticker: {ticker_symbol}. Please check the ticker symbol and date range.")
+            return pd.DataFrame()
+        
+        # Ensure 'Close' column exists and is a float
+        if 'Close' not in data.columns:
+            st.error(f"The 'Close' price data could not be found for {ticker_symbol}.")
             return pd.DataFrame()
 
-        # Fix for Plotly ValueError: Flatten multi-level columns if they exist
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = ['_'.join(col).strip() for col in data.columns.values]
-            data = data.rename(columns={f'Close_{ticker}': 'Close'})
-            data = data[['Close']].copy()
-        
         return data[['Close']].copy()
     except Exception as e:
         st.error(f"An error occurred while fetching data: {e}")
         return pd.DataFrame()
 
-df = load_data(ticker, start_date, end_date)
+df = load_data(ticker_symbol, start_date, end_date)
 
 if df.empty:
     st.stop()
 
-st.subheader(f'Raw Data for {ticker} (Last 5 Rows)')
+st.subheader(f'Raw Data for {ticker_symbol} (Last 5 Rows)')
 st.write(df.tail())
 
 # --- Plot Raw Data with Plotly ---
-st.subheader(f'{ticker} Closing Price Over Time')
-fig_raw = px.line(df, x=df.index, y='Close', title=f'{ticker} Historical Closing Price',
+st.subheader(f'{ticker_symbol} Closing Price Over Time')
+fig_raw = px.line(df, x=df.index, y='Close', title=f'{ticker_symbol} Historical Closing Price',
                   labels={'Date': 'Date', 'Close': 'Close Price (USD)'})
 fig_raw.update_layout(xaxis_rangeslider_visible=True, template='plotly_dark')
 st.plotly_chart(fig_raw, use_container_width=True)
@@ -143,7 +141,7 @@ if st.sidebar.button('Generate Forecast'):
                     fig_arima = go.Figure()
                     fig_arima.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Historical Data', line=dict(color='royalblue')))
                     fig_arima.add_trace(go.Scatter(x=forecast_df.index, y=forecast_df['Forecast'], mode='lines', name='ARIMA Forecast', line=dict(color='red', dash='dash')))
-                    fig_arima.update_layout(title=f'ARIMA {ticker} Price Forecast', xaxis_title='Date', yaxis_title='Close Price (USD)', template='plotly_dark')
+                    fig_arima.update_layout(title=f'ARIMA {ticker_symbol} Price Forecast', xaxis_title='Date', yaxis_title='Close Price (USD)', template='plotly_dark')
                     st.plotly_chart(fig_arima, use_container_width=True)
                 else:
                     st.error("ARIMA forecast could not be generated.")
@@ -173,7 +171,7 @@ if st.sidebar.button('Generate Forecast'):
                 fig_prophet.add_trace(go.Scatter(x=forecast_future['ds'], y=forecast_future['yhat_upper'], mode='lines', name='Upper Bound', fill='tonexty', fillcolor='rgba(152, 251, 152, 0.4)', line=dict(width=0)))
                 fig_prophet.add_trace(go.Scatter(x=prophet_df_full['ds'], y=prophet_df_full['y'], mode='lines', name='Historical Data', line=dict(color='royalblue')))
                 fig_prophet.add_trace(go.Scatter(x=forecast_future['ds'], y=forecast_future['yhat'], mode='lines', name='Prophet Forecast', line=dict(color='green', dash='dash')))
-                fig_prophet.update_layout(title=f'Prophet {ticker} Price Forecast', xaxis_title='Date', yaxis_title='Close Price (USD)', template='plotly_dark')
+                fig_prophet.update_layout(title=f'Prophet {ticker_symbol} Price Forecast', xaxis_title='Date', yaxis_title='Close Price (USD)', template='plotly_dark')
                 st.plotly_chart(fig_prophet, use_container_width=True)
 
                 with st.expander("See Prophet Forecast Components"):
@@ -248,7 +246,7 @@ if st.sidebar.button('Generate Forecast'):
                 fig_lstm = go.Figure()
                 fig_lstm.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Historical Data', line=dict(color='royalblue')))
                 fig_lstm.add_trace(go.Scatter(x=forecast_df.index, y=forecast_df['Forecast'], mode='lines', name='LSTM Forecast', line=dict(color='purple', dash='dash')))
-                fig_lstm.update_layout(title=f'LSTM {ticker} Price Forecast', xaxis_title='Date', yaxis_title='Close Price (USD)', template='plotly_dark')
+                fig_lstm.update_layout(title=f'LSTM {ticker_symbol} Price Forecast', xaxis_title='Date', yaxis_title='Close Price (USD)', template='plotly_dark')
                 st.plotly_chart(fig_lstm, use_container_width=True)
 
         except Exception as e:
@@ -256,7 +254,7 @@ if st.sidebar.button('Generate Forecast'):
             st.warning(f"Please check your data and model parameters. For LSTM, ensure enough historical data is available (e.g., more than {time_step} days).")
     
     st.markdown("---")
-    st.subheader(f'Model Accuracy on Test Data (Last 20% of the {ticker} dataset)')
+    st.subheader(f'Model Accuracy on Test Data (Last 20% of the {ticker_symbol} dataset)')
     st.markdown("Metrics are calculated by training the model on 80% of the data and predicting on the remaining 20%.")
     
     if model_choice in accuracy_metric:
