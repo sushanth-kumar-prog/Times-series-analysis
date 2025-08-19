@@ -9,7 +9,6 @@ import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
-import yfinance as yf
 from datetime import date, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
@@ -19,49 +18,27 @@ tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 st.set_page_config(layout="wide", page_title="Stock Price Forecasting App")
 
-st.title('📈 Dynamic Stock Price Forecasting App')
-st.markdown("Predict future stock prices using various time series models on any stock ticker.")
+st.title('📈 Dynamic Stock Price Forecasting App (Demo Mode)')
+st.markdown("This version uses a **generated sample dataset** to demonstrate the app's functionality.")
 
-# --- Sidebar for user input ---
-st.sidebar.header("Input Parameters")
-# Changed default ticker to GOOG for better reliability
-ticker_symbol = st.sidebar.text_input('Stock Ticker', 'GOOG').upper()
+# --- Generate Sample Data ---
+@st.cache_data
+def generate_sample_data():
+    """Generates a synthetic stock price dataset."""
+    today = date.today()
+    start_date = today - timedelta(days=365*5)
+    dates = pd.date_range(start=start_date, end=today, freq='B')
+    
+    # Generate a time series with some trend and seasonality
+    np.random.seed(42)
+    t = np.arange(len(dates))
+    y = 50 + 0.1 * t + 5 * np.sin(t / 10) + np.random.randn(len(t)) * 2
+    
+    df = pd.DataFrame(y, index=dates, columns=['Close'])
+    return df
 
-# Set default date range
-today = date.today()
-end_date = st.sidebar.date_input('End Date', today)
-start_date = st.sidebar.date_input('Start Date', end_date - timedelta(days=365*5))
-
-# --- Data Loading ---
-if st.sidebar.button('Reload Data'):
-    st.cache_data.clear()
-
-def load_data(ticker_symbol, start, end):
-    """
-    Fetches historical stock data using yfinance.Ticker().history() for better reliability.
-    """
-    try:
-        ticker = yf.Ticker(ticker_symbol)
-        data = ticker.history(start=start, end=end)
-        
-        if data.empty:
-            st.error(f"No data found for ticker: {ticker_symbol}. Please check the ticker symbol and date range.")
-            return pd.DataFrame()
-        
-        # Ensure 'Close' column exists and handle potential KeyError
-        if 'Close' not in data.columns:
-            st.error(f"The 'Close' price data could not be found for {ticker_symbol}.")
-            return pd.DataFrame()
-
-        return data[['Close']].copy()
-    except Exception as e:
-        st.error(f"An error occurred while fetching data: {e}")
-        return pd.DataFrame()
-
-df = load_data(ticker_symbol, start_date, end_date)
-
-if df.empty:
-    st.stop()
+df = generate_sample_data()
+ticker_symbol = "DEMO"
 
 st.subheader(f'Raw Data for {ticker_symbol} (Last 5 Rows)')
 st.write(df.tail())
