@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 from statsmodels.tsa.arima.model import ARIMA
 from prophet import Prophet
-from sklearn.metrics import mean_squared_error
 import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
@@ -12,6 +11,7 @@ from tensorflow.keras.layers import LSTM, Dense
 from datetime import date, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
+from sklearn.metrics import mean_squared_error
 
 # Suppress TensorFlow warnings
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
