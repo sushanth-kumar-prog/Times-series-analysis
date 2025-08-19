@@ -24,7 +24,8 @@ st.markdown("Predict future stock prices using various time series models on any
 
 # --- Sidebar for user input ---
 st.sidebar.header("Input Parameters")
-ticker_symbol = st.sidebar.text_input('Stock Ticker', 'GOOGL').upper()
+# Changed default ticker to GOOG for better reliability
+ticker_symbol = st.sidebar.text_input('Stock Ticker', 'GOOG').upper()
 
 # Set default date range
 today = date.today()
@@ -35,8 +36,10 @@ start_date = st.sidebar.date_input('Start Date', end_date - timedelta(days=365*5
 if st.sidebar.button('Reload Data'):
     st.cache_data.clear()
 
-# Use Ticker object instead of direct download function for more reliability
 def load_data(ticker_symbol, start, end):
+    """
+    Fetches historical stock data using yfinance.Ticker().history() for better reliability.
+    """
     try:
         ticker = yf.Ticker(ticker_symbol)
         data = ticker.history(start=start, end=end)
@@ -45,7 +48,7 @@ def load_data(ticker_symbol, start, end):
             st.error(f"No data found for ticker: {ticker_symbol}. Please check the ticker symbol and date range.")
             return pd.DataFrame()
         
-        # Ensure 'Close' column exists and is a float
+        # Ensure 'Close' column exists and handle potential KeyError
         if 'Close' not in data.columns:
             st.error(f"The 'Close' price data could not be found for {ticker_symbol}.")
             return pd.DataFrame()
