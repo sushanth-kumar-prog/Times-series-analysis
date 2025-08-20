@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+import backoff  # <-- ADD THIS IMPORT
 from statsmodels.tsa.arima.model import ARIMA
 from prophet import Prophet
 from sklearn.metrics import mean_squared_error
@@ -36,34 +37,40 @@ start_date = st.sidebar.date_input('Start Date', end_date - timedelta(days=365*5
 if st.sidebar.button('Reload Data'):
     st.cache_data.clear()
 
+# --- THIS IS THE FINAL FIX ATTEMPT ---
 @st.cache_data
+@backoff.on_exception(backoff.expo, requests.exceptions.RequestException, max_tries=3)
 def load_data(ticker, start, end):
     """
-    Loads stock data from Yahoo Finance using the more robust Ticker method.
+    Loads stock data from Yahoo Finance using the Ticker method with retries.
     """
     try:
-        # --- THE DEFINITIVE FIX ---
-        # Use the yf.Ticker object for a more reliable data fetch
         ticker_obj = yf.Ticker(ticker)
-        data = ticker_obj.history(start=start, end=end)
-        # --- END OF FIX ---
+        # The most robust way to download, with a timeout.
+        data = ticker_obj.history(start=start, end=end, timeout=10)
         
         if data.empty:
-            st.error(f"No data found for ticker: {ticker}. This could be due to an invalid ticker, a delisted stock, or an incorrect date range.")
+            # Check if the ticker is valid at all
+            if not ticker_obj.info:
+                 st.error(f"Invalid ticker symbol: {ticker}")
+                 return pd.DataFrame()
+            st.error(f"No data found for ticker: {ticker} in the selected date range.")
             return pd.DataFrame()
 
-        # The rest of the data processing is the same, just need the 'Close' column
         return data[['Close']].copy()
         
     except Exception as e:
         st.error(f"An error occurred while fetching data: {e}")
         return pd.DataFrame()
 
+# --- END OF FIX ATTEMPT ---
+
 df = load_data(ticker, start_date, end_date)
 
 if df.empty:
     st.stop()
 
+# --- The rest of your code remains exactly the same ---
 st.subheader(f'Raw Data for {ticker} (Last 5 Rows)')
 st.write(df.tail())
 
