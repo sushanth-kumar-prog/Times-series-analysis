@@ -7,3 +7,4 @@ statsmodels
 tensorflow
 scikit-learn
 yfinance==0.2.38
+requests==2.32.5 
