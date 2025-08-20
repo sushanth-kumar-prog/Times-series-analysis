@@ -2,7 +2,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import requests  # <-- ADDED THIS IMPORT
+import requests
 from statsmodels.tsa.arima.model import ARIMA
 from prophet import Prophet
 from sklearn.metrics import mean_squared_error
@@ -39,28 +39,22 @@ if st.sidebar.button('Reload Data'):
 @st.cache_data
 def load_data(ticker, start, end):
     """
-    Loads stock data from Yahoo Finance.
+    Loads stock data from Yahoo Finance using the more robust Ticker method.
     """
-    # --- THIS IS THE CRITICAL FIX ---
-    # Create a requests Session for more robust data fetching
-    session = requests.Session()
-    session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    
     try:
-        # Pass the session to the yf.download call
-        data = yf.download(ticker, start=start, end=end, progress=False, session=session)
+        # --- THE DEFINITIVE FIX ---
+        # Use the yf.Ticker object for a more reliable data fetch
+        ticker_obj = yf.Ticker(ticker)
+        data = ticker_obj.history(start=start, end=end)
+        # --- END OF FIX ---
         
         if data.empty:
             st.error(f"No data found for ticker: {ticker}. This could be due to an invalid ticker, a delisted stock, or an incorrect date range.")
             return pd.DataFrame()
 
-        # Fix for Plotly ValueError: Flatten multi-level columns if they exist
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = ['_'.join(col).strip() for col in data.columns.values]
-            data = data.rename(columns={f'Close_{ticker}': 'Close'})
-            data = data[['Close']].copy()
-        
+        # The rest of the data processing is the same, just need the 'Close' column
         return data[['Close']].copy()
+        
     except Exception as e:
         st.error(f"An error occurred while fetching data: {e}")
         return pd.DataFrame()
