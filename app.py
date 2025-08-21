@@ -34,12 +34,14 @@ start_date = st.sidebar.date_input('Start Date', end_date - timedelta(days=365*5
 # --- Data Loading ---
 if st.sidebar.button('Reload Data'):
     st.cache_data.clear()
+    st.experimental_rerun() # Use this to force a full re-run
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def load_data(ticker, start, end):
     """
     Loads split-adjusted stock data from Yahoo Finance using the robust Ticker method.
     """
+    st.write(f"Attempting to fetch data for {ticker} from {start} to {end}...")
     try:
         # --- THE DEFINITIVE FIX USING YFINANCE ---
         # The Ticker object is the most reliable way to get clean, adjusted data
@@ -47,15 +49,18 @@ def load_data(ticker, start, end):
         data = ticker_obj.history(start=start, end=end)
         # --- END OF FIX ---
         
+        st.write(f"Data fetched. Checking if it's empty...")
         if data.empty:
             st.error(f"No data found for ticker: {ticker}. The ticker may be invalid or delisted.")
             return pd.DataFrame()
 
+        st.write("Data is not empty. Success!")
         # By default, yfinance's .history() returns adjusted data. We just need the 'Close' column.
         return data[['Close']].copy()
         
     except Exception as e:
         st.error(f"An error occurred while fetching data from Yahoo Finance: {e}")
+        st.write("Please check your internet connection or try a different network.")
         return pd.DataFrame()
 
 df = load_data(ticker, start_date, end_date)
@@ -235,4 +240,3 @@ if st.sidebar.button('Generate Forecast'):
         st.warning("Accuracy metrics could not be calculated for this model.")
 
 st.sidebar.success('App created by a fellow data enthusiast!')
-#ended
