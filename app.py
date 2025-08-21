@@ -9,7 +9,7 @@ import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
-import yfinance as yf # <-- IMPORT yfinance
+from yahoofinancials import YahooFinancials # <-- NEW LIBRARY
 from datetime import date, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
@@ -33,34 +33,40 @@ start_date = st.sidebar.date_input('Start Date', end_date - timedelta(days=365*5
 
 # --- Data Loading ---
 if st.sidebar.button('Reload Data'):
-    st.cache_data.clear()
-    st.experimental_rerun() # Use this to force a full re-run
+    st.experimental_rerun()
 
-@st.cache_data(show_spinner=False)
+# Note: We are not using st.cache_data here to ensure we bypass any potential caching issues
 def load_data(ticker, start, end):
     """
-    Loads split-adjusted stock data from Yahoo Finance using the robust Ticker method.
+    Loads stock data using the YahooFinancials library, which is a robust alternative.
     """
     st.write(f"Attempting to fetch data for {ticker} from {start} to {end}...")
     try:
-        # --- THE DEFINITIVE FIX USING YFINANCE ---
-        # The Ticker object is the most reliable way to get clean, adjusted data
-        ticker_obj = yf.Ticker(ticker)
-        data = ticker_obj.history(start=start, end=end)
-        # --- END OF FIX ---
+        yahoo_financials = YahooFinancials(ticker)
+        data = yahoo_financials.get_historical_price_data(
+            start_date=start.strftime('%Y-%m-%d'),
+            end_date=end.strftime('%Y-%m-%d'),
+            time_interval='daily'
+        )
         
-        st.write(f"Data fetched. Checking if it's empty...")
-        if data.empty:
+        if 'prices' not in data or not data['prices']:
             st.error(f"No data found for ticker: {ticker}. The ticker may be invalid or delisted.")
+            st.write("Please check the ticker symbol or your internet connection.")
             return pd.DataFrame()
-
-        st.write("Data is not empty. Success!")
-        # By default, yfinance's .history() returns adjusted data. We just need the 'Close' column.
-        return data[['Close']].copy()
+        
+        # Parse the JSON data into a pandas DataFrame
+        df = pd.DataFrame(data['prices'])
+        df = df[['formatted_date', 'close']]
+        df.columns = ['Date', 'Close']
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.set_index('Date')
+        
+        st.write("Data fetched and processed successfully!")
+        return df[['Close']].copy()
         
     except Exception as e:
-        st.error(f"An error occurred while fetching data from Yahoo Finance: {e}")
-        st.write("Please check your internet connection or try a different network.")
+        st.error(f"An error occurred while fetching data from YahooFinancials: {e}")
+        st.write("Please check your internet connection or try again later.")
         return pd.DataFrame()
 
 df = load_data(ticker, start_date, end_date)
@@ -101,7 +107,6 @@ if st.sidebar.button('Generate Forecast'):
 
     with st.spinner(f'Generating {model_choice} forecast...'):
         try:
-            # THE REST OF THE CODE (ARIMA, PROPHET, LSTM) REMAINS IDENTICAL
             if model_choice == 'ARIMA':
                 model_test = ARIMA(train_data['Close'], order=(5, 1, 0))
                 model_test_fit = model_test.fit()
@@ -153,20 +158,14 @@ if st.sidebar.button('Generate Forecast'):
                 st.plotly_chart(fig_prophet, use_container_width=True)
 
                 with st.expander("See Prophet Forecast Components"):
-                    # Prophet plot_components returns a matplotlib figure, so we need to use st.pyplot
                     st.pyplot(prophet_model_full.plot_components(forecast_future))
 
             elif model_choice == 'LSTM':
-                # --- CORRECTED CODE FOR LSTM: AVOID DATA LEAKAGE ---
-                # 1. Separate training and testing data before scaling
                 train_data_full = df.iloc[:train_size]['Close'].values.reshape(-1, 1)
                 test_data_full = df.iloc[train_size:]['Close'].values.reshape(-1, 1)
                 
-                # 2. Fit the scaler ONLY on the training data
                 scaler = MinMaxScaler(feature_range=(0, 1))
                 train_data_scaled = scaler.fit_transform(train_data_full)
-                
-                # 3. Transform both train and test data using the scaler fitted on the training set
                 test_data_scaled = scaler.transform(test_data_full)
                 
                 def create_dataset(dataset, time_step=1):
@@ -199,8 +198,6 @@ if st.sidebar.button('Generate Forecast'):
                 rmse = np.sqrt(mse)
                 accuracy_metric['LSTM'] = {'MSE': mse, 'RMSE': rmse}
 
-                # --- Continue with the forecast on the full data set ---
-                # Use a combined dataset for future predictions to get the most up-to-date model
                 scaled_data_full = scaler.fit_transform(df['Close'].values.reshape(-1, 1))
                 current_input_sequence_scaled = list(scaled_data_full[-time_step:].flatten())
                 predictions_scaled = []
