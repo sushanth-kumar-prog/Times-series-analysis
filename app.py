@@ -9,7 +9,7 @@ import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
-from alpha_vantage.timeseries import TimeSeries
+import yfinance as yf  # <-- IMPORT yfinance
 from datetime import date, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
@@ -25,7 +25,6 @@ st.markdown("Predict future stock prices using various time series models on any
 # --- Sidebar for user input ---
 st.sidebar.header("Input Parameters")
 ticker = st.sidebar.text_input('Stock Ticker', 'GOOGL').upper()
-ALPHA_VANTAGE_API_KEY = "AZKWKA2YRWA88QX9"  # Your API Key
 
 # Set default date range
 today = date.today()
@@ -39,46 +38,24 @@ if st.sidebar.button('Reload Data'):
 @st.cache_data
 def load_data(ticker, start, end):
     """
-    Loads SPLIT-ADJUSTED stock data from Alpha Vantage.
+    Loads split-adjusted stock data from Yahoo Finance using the robust Ticker method.
     """
     try:
-        ts = TimeSeries(key=ALPHA_VANTAGE_API_KEY, output_format='pandas')
-        
-        # --- THIS IS THE CRITICAL FIX ---
-        # Use get_daily_adjusted to get data that accounts for stock splits
-        data, meta_data = ts.get_daily_adjusted(symbol=ticker, outputsize='full')
-        
-        # --- Process the ADJUSTED Alpha Vantage Data ---
-        # 1. Rename columns for consistency. Note the '5. adjusted close'.
-        data.rename(columns={
-            '1. open': 'Open',
-            '2. high': 'High',
-            '3. low': 'Low',
-            '4. close': 'Raw Close', # The original close price
-            '5. adjusted close': 'Close', # We will use the ADJUSTED close for everything
-            '6. volume': 'Volume'
-        }, inplace=True)
+        # --- THE DEFINITIVE FIX USING YFINANCE ---
+        # The Ticker object is the most reliable way to get clean, adjusted data
+        ticker_obj = yf.Ticker(ticker)
+        data = ticker_obj.history(start=start, end=end)
         # --- END OF FIX ---
         
-        # 2. Convert index to datetime objects
-        data.index = pd.to_datetime(data.index)
-        
-        # 3. Sort by date in ascending order (oldest to newest)
-        data.sort_index(inplace=True)
-        
-        # 4. Filter the data to the selected date range
-        data = data.loc[start_date:end_date]
-
         if data.empty:
-            st.error(f"No data found for ticker: {ticker}. The ticker might be invalid or no data exists for the selected date range.")
+            st.error(f"No data found for ticker: {ticker}. The ticker may be invalid or delisted.")
             return pd.DataFrame()
 
-        # Return only the 'Close' column, which is now the adjusted price
+        # By default, yfinance's .history() returns adjusted data. We just need the 'Close' column.
         return data[['Close']].copy()
         
     except Exception as e:
-        st.error(f"An error occurred while fetching data from Alpha Vantage: {e}")
-        st.warning("This could be due to an invalid API key, an incorrect ticker symbol, or reaching the API call limit (5 calls per minute on the free tier).")
+        st.error(f"An error occurred while fetching data from Yahoo Finance: {e}")
         return pd.DataFrame()
 
 df = load_data(ticker, start_date, end_date)
