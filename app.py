@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,7 +9,7 @@ import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
-from alpha_vantage.timeseries import TimeSeries  # <-- IMPORT for Alpha Vantage
+from alpha_vantage.timeseries import TimeSeries
 from datetime import date, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
@@ -24,7 +25,7 @@ st.markdown("Predict future stock prices using various time series models on any
 # --- Sidebar for user input ---
 st.sidebar.header("Input Parameters")
 ticker = st.sidebar.text_input('Stock Ticker', 'GOOGL').upper()
-ALPHA_VANTAGE_API_KEY = "AZKWKA2YRWA88QX9"  # <-- YOUR API KEY
+ALPHA_VANTAGE_API_KEY = "AZKWKA2YRWA88QX9"  # Your API Key
 
 # Set default date range
 today = date.today()
@@ -38,22 +39,26 @@ if st.sidebar.button('Reload Data'):
 @st.cache_data
 def load_data(ticker, start, end):
     """
-    Loads stock data from Alpha Vantage.
+    Loads SPLIT-ADJUSTED stock data from Alpha Vantage.
     """
     try:
         ts = TimeSeries(key=ALPHA_VANTAGE_API_KEY, output_format='pandas')
-        # Get the full history, as Alpha Vantage doesn't support date ranges in the call
-        data, meta_data = ts.get_daily(symbol=ticker, outputsize='full')
-
-        # --- Process the Alpha Vantage Data ---
-        # 1. Rename columns for consistency
+        
+        # --- THIS IS THE CRITICAL FIX ---
+        # Use get_daily_adjusted to get data that accounts for stock splits
+        data, meta_data = ts.get_daily_adjusted(symbol=ticker, outputsize='full')
+        
+        # --- Process the ADJUSTED Alpha Vantage Data ---
+        # 1. Rename columns for consistency. Note the '5. adjusted close'.
         data.rename(columns={
             '1. open': 'Open',
             '2. high': 'High',
             '3. low': 'Low',
-            '4. close': 'Close',
-            '5. volume': 'Volume'
+            '4. close': 'Raw Close', # The original close price
+            '5. adjusted close': 'Close', # We will use the ADJUSTED close for everything
+            '6. volume': 'Volume'
         }, inplace=True)
+        # --- END OF FIX ---
         
         # 2. Convert index to datetime objects
         data.index = pd.to_datetime(data.index)
@@ -68,6 +73,7 @@ def load_data(ticker, start, end):
             st.error(f"No data found for ticker: {ticker}. The ticker might be invalid or no data exists for the selected date range.")
             return pd.DataFrame()
 
+        # Return only the 'Close' column, which is now the adjusted price
         return data[['Close']].copy()
         
     except Exception as e:
