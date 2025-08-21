@@ -1,197 +1,244 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-import yfinance as yf
+from statsmodels.tsa.arima.model import ARIMA
 from prophet import Prophet
-from prophet.plot import plot_plotly
-from statsmodels.tsa.seasonal import seasonal_decompose
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.metrics import mean_squared_error
+import tensorflow as tf
+from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
-from sklearn.preprocessing import MinMaxScaler
+from alpha_vantage.timeseries import TimeSeries  # <-- IMPORT for Alpha Vantage
+from datetime import date, timedelta
 import plotly.express as px
-import backoff
-import json
+import plotly.graph_objects as go
 
-# --- Page Config ---
-st.set_page_config(
-    page_title="Stock Forecasting App",
-    page_icon="📈",
-    layout="wide",
-)
+# Suppress TensorFlow warnings
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
-# --- Functions for Data Fetching and Forecasting ---
+st.set_page_config(layout="wide", page_title="Stock Price Forecasting App")
 
-# Function to safely fetch stock data with retries for network issues
-@st.cache_data(show_spinner=False)
-@backoff.on_exception(
-    backoff.expo,
-    (yf.YFInvalidTickerError, ConnectionError, TimeoutError),
-    max_tries=3,
-)
-def get_stock_data(ticker):
+st.title('📈 Dynamic Stock Price Forecasting App')
+st.markdown("Predict future stock prices using various time series models on any stock ticker.")
+
+# --- Sidebar for user input ---
+st.sidebar.header("Input Parameters")
+ticker = st.sidebar.text_input('Stock Ticker', 'GOOGL').upper()
+ALPHA_VANTAGE_API_KEY = "AZKWKA2YRWA88QX9"  # <-- YOUR API KEY
+
+# Set default date range
+today = date.today()
+end_date = st.sidebar.date_input('End Date', today)
+start_date = st.sidebar.date_input('Start Date', end_date - timedelta(days=365*5))
+
+# --- Data Loading ---
+if st.sidebar.button('Reload Data'):
+    st.cache_data.clear()
+
+@st.cache_data
+def load_data(ticker, start, end):
     """
-    Fetches historical stock data for a given ticker.
+    Loads stock data from Alpha Vantage.
     """
     try:
-        data = yf.download(ticker, start="2010-01-01", progress=False)
-        if data.empty:
-            st.error(f"Could not find a stock with the ticker: {ticker}. Please check the ticker symbol.")
-            return None
-        return data
-    except yf.YFInvalidTickerError:
-        st.error(f"Invalid ticker symbol: {ticker}. Please enter a valid stock ticker.")
-        return None
-    except Exception as e:
-        st.error(f"An error occurred while fetching data: {e}. Please try again.")
-        return None
+        ts = TimeSeries(key=ALPHA_VANTAGE_API_KEY, output_format='pandas')
+        # Get the full history, as Alpha Vantage doesn't support date ranges in the call
+        data, meta_data = ts.get_daily(symbol=ticker, outputsize='full')
 
-def plot_stock_data(data, title):
-    """
-    Plots the closing price of the stock.
-    """
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=data.index, y=data['Close'], name='Stock Close Price'))
-    fig.update_layout(title_text=title, xaxis_rangeslider_visible=True, template="plotly_dark")
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def plot_prophet_forecast(model, future, forecast):
-    """
-    Plots the Prophet forecast.
-    """
-    fig1 = plot_plotly(model, forecast)
-    fig1.update_layout(title="Prophet Forecast Plot", template="plotly_dark")
-    st.plotly_chart(fig1, use_container_width=True)
-
-    st.subheader("Prophet Forecast Components")
-    fig2 = model.plot_components(forecast)
-    st.pyplot(fig2, use_container_width=True)
-
-
-def plot_lstm_forecast(data, forecast, title):
-    """
-    Plots the LSTM forecast.
-    """
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=data.index, y=data, name="Actual Price", mode="lines"))
-    fig.add_trace(go.Scatter(x=forecast.index, y=forecast['Prediction'], name="Predicted Price", mode="lines"))
-    fig.update_layout(title_text=title, template="plotly_dark")
-    st.plotly_chart(fig, use_container_width=True)
-
-
-# --- UI and Main Logic ---
-
-st.title("Stock Forecasting App")
-st.write("This app predicts stock prices using various machine learning models.")
-
-# Sidebar for user inputs
-st.sidebar.header("User Input")
-stock_ticker = st.sidebar.text_input("Enter a stock ticker (e.g., AAPL)", "AAPL").upper()
-n_days = st.sidebar.slider("Number of days to forecast", 30, 365, 90)
-
-# Main content
-st.info("Please wait while the app loads data and trains the models...")
-
-# Fetch stock data
-df = get_stock_data(stock_ticker)
-
-if df is not None and not df.empty:
-    st.success("Data fetched successfully!")
-
-    # --- Data Processing and Display ---
-    st.subheader(f"Historical Data for {stock_ticker}")
-    st.write(df.tail())
-    plot_stock_data(df, f"Historical Closing Price for {stock_ticker}")
-
-    # --- Model Selection and Forecasting ---
-    st.header("Stock Price Forecasting")
-    model_choice = st.selectbox(
-        "Select a forecasting model",
-        ("Prophet", "LSTM", "Seasonal Decomposition"),
-    )
-
-    if model_choice == "Prophet":
-        st.subheader("Forecasting with Prophet")
-        data_prophet = df.reset_index()[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
-        model_prophet = Prophet()
-        model_prophet.fit(data_prophet)
-
-        future_prophet = model_prophet.make_future_dataframe(periods=n_days)
-        forecast_prophet = model_prophet.predict(future_prophet)
-
-        st.subheader(f"Prophet Forecast for the next {n_days} days")
-        st.write(forecast_prophet[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail())
-        plot_prophet_forecast(model_prophet, future_prophet, forecast_prophet)
-
-        st.subheader("Model Evaluation")
-        y_true = data_prophet['y']
-        y_pred = forecast_prophet['yhat'].iloc[:-n_days]
-        mae = mean_absolute_error(y_true, y_pred)
-        rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-
-        st.write(f"Mean Absolute Error (MAE): {mae:.2f}")
-        st.write(f"Root Mean Squared Error (RMSE): {rmse:.2f}")
-
-    elif model_choice == "LSTM":
-        st.subheader("Forecasting with LSTM")
-
-        # Prepare data for LSTM
-        scaler = MinMaxScaler(feature_range=(0, 1))
-        scaled_data = scaler.fit_transform(df['Close'].values.reshape(-1, 1))
-
-        training_data_len = int(len(scaled_data) * 0.8)
-        train_data = scaled_data[0:training_data_len, :]
-
-        # Create training data set
-        x_train, y_train = [], []
-        for i in range(60, len(train_data)):
-            x_train.append(train_data[i - 60 : i, 0])
-            y_train.append(train_data[i, 0])
-
-        x_train, y_train = np.array(x_train), np.array(y_train)
-        x_train = np.reshape(x_train, (x_train.shape[0], x_train.shape[1], 1))
-
-        # Build the LSTM model
-        model_lstm = Sequential()
-        model_lstm.add(LSTM(50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
-        model_lstm.add(LSTM(50, return_sequences=False))
-        model_lstm.add(Dense(25))
-        model_lstm.add(Dense(1))
-
-        model_lstm.compile(optimizer='adam', loss='mean_squared_error')
-        model_lstm.fit(x_train, y_train, batch_size=1, epochs=1, verbose=0)
-
-        # Make predictions for the future
-        future_data = scaled_data[-60:].reshape(1, 60, 1)
-        future_predictions = []
-
-        for _ in range(n_days):
-            prediction = model_lstm.predict(future_data, verbose=0)
-            future_predictions.append(prediction[0, 0])
-            future_data = np.append(future_data[:, 1:, :], prediction.reshape(1, 1, 1), axis=1)
-
-        # Inverse transform the predictions
-        future_predictions = scaler.inverse_transform(np.array(future_predictions).reshape(-1, 1))
-
-        # Create a dataframe for the forecast
-        future_dates = pd.date_range(start=df.index[-1] + pd.Timedelta(days=1), periods=n_days, freq='D')
-        forecast_lstm = pd.DataFrame(future_predictions, index=future_dates, columns=['Prediction'])
-
-        st.subheader(f"LSTM Forecast for the next {n_days} days")
-        st.write(forecast_lstm.head())
-        plot_lstm_forecast(df['Close'], forecast_lstm, f"LSTM Forecast for {stock_ticker}")
+        # --- Process the Alpha Vantage Data ---
+        # 1. Rename columns for consistency
+        data.rename(columns={
+            '1. open': 'Open',
+            '2. high': 'High',
+            '3. low': 'Low',
+            '4. close': 'Close',
+            '5. volume': 'Volume'
+        }, inplace=True)
         
-    elif model_choice == "Seasonal Decomposition":
-        st.subheader("Seasonal Decomposition Analysis")
-        st.write("This model decomposes the stock price into its trend, seasonal, and residual components.")
+        # 2. Convert index to datetime objects
+        data.index = pd.to_datetime(data.index)
+        
+        # 3. Sort by date in ascending order (oldest to newest)
+        data.sort_index(inplace=True)
+        
+        # 4. Filter the data to the selected date range
+        data = data.loc[start_date:end_date]
 
+        if data.empty:
+            st.error(f"No data found for ticker: {ticker}. The ticker might be invalid or no data exists for the selected date range.")
+            return pd.DataFrame()
+
+        return data[['Close']].copy()
+        
+    except Exception as e:
+        st.error(f"An error occurred while fetching data from Alpha Vantage: {e}")
+        st.warning("This could be due to an invalid API key, an incorrect ticker symbol, or reaching the API call limit (5 calls per minute on the free tier).")
+        return pd.DataFrame()
+
+df = load_data(ticker, start_date, end_date)
+
+if df.empty:
+    st.stop()
+
+st.subheader(f'Raw Data for {ticker} (Last 5 Rows)')
+st.write(df.tail())
+
+# --- Plot Raw Data with Plotly ---
+st.subheader(f'{ticker} Closing Price Over Time')
+fig_raw = px.line(df, x=df.index, y='Close', title=f'{ticker} Historical Closing Price',
+                  labels={'Date': 'Date', 'Close': 'Close Price (USD)'})
+fig_raw.update_layout(xaxis_rangeslider_visible=True, template='plotly_dark')
+st.plotly_chart(fig_raw, use_container_width=True)
+
+# --- Model Selection and Forecasting Parameters ---
+st.sidebar.header("Forecasting Settings")
+model_choice = st.sidebar.selectbox(
+    'Choose a forecasting model:',
+    ('ARIMA', 'Prophet', 'LSTM')
+)
+forecast_steps = st.sidebar.slider('Select number of days to forecast', 30, 365, 90)
+
+# --- Forecasting Button ---
+if st.sidebar.button('Generate Forecast'):
+    time_step = 60
+    if len(df) < time_step + 1 and model_choice == 'LSTM':
+        st.error(f"Not enough historical data to train the LSTM model. It requires at least {time_step + 1} data points. Your dataset has {len(df)}.")
+        st.stop()
+
+    train_size = int(len(df) * 0.8)
+    train_data, test_data = df[0:train_size], df[train_size:len(df)]
+
+    st.subheader(f'{model_choice} Forecast')
+    accuracy_metric = {}
+
+    with st.spinner(f'Generating {model_choice} forecast...'):
         try:
-            decomposition = seasonal_decompose(df['Close'], model='multiplicative', period=365)
-            fig_sd = decomposition.plot()
-            st.pyplot(fig_sd)
-        except Exception as e:
-            st.warning(f"Could not perform seasonal decomposition. This can happen with limited data. Error: {e}")
+            # THE REST OF THE CODE (ARIMA, PROPHET, LSTM) REMAINS IDENTICAL
+            if model_choice == 'ARIMA':
+                model_test = ARIMA(train_data['Close'], order=(5, 1, 0))
+                model_test_fit = model_test.fit()
+                test_predictions = model_test_fit.forecast(steps=len(test_data))
+                
+                mse = mean_squared_error(test_data['Close'], test_predictions)
+                rmse = np.sqrt(mse)
+                accuracy_metric['ARIMA'] = {'MSE': mse, 'RMSE': rmse}
 
+                model_full = ARIMA(df['Close'], order=(5, 1, 0))
+                model_full_fit = model_full.fit()
+                future_predictions = model_full_fit.forecast(steps=forecast_steps)
+                
+                last_historical_date = df.index[-1]
+                forecast_index = pd.date_range(start=last_historical_date + pd.Timedelta(days=1), periods=forecast_steps, freq='B')
+                forecast_df = pd.DataFrame({'Forecast': future_predictions}, index=forecast_index)
+                
+                fig_arima = go.Figure()
+                fig_arima.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Historical Data', line=dict(color='royalblue')))
+                fig_arima.add_trace(go.Scatter(x=forecast_df.index, y=forecast_df['Forecast'], mode='lines', name='ARIMA Forecast', line=dict(color='red', dash='dash')))
+                fig_arima.update_layout(title=f'ARIMA {ticker} Price Forecast', xaxis_title='Date', yaxis_title='Close Price (USD)', template='plotly_dark')
+                st.plotly_chart(fig_arima, use_container_width=True)
+                
+            elif model_choice == 'Prophet':
+                prophet_df_train = train_data.reset_index().rename(columns={'Date': 'ds', 'Close': 'y'})
+                prophet_model_train = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True, interval_width=0.95)
+                prophet_model_train.fit(prophet_df_train)
+
+                future_test = prophet_model_train.make_future_dataframe(periods=len(test_data), freq='B')
+                forecast_test = prophet_model_train.predict(future_test)
+                test_predictions = forecast_test['yhat'].values[-len(test_data):]
+                
+                mse = mean_squared_error(test_data['Close'], test_predictions)
+                rmse = np.sqrt(mse)
+                accuracy_metric['Prophet'] = {'MSE': mse, 'RMSE': rmse}
+
+                prophet_df_full = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y'})
+                prophet_model_full = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True, interval_width=0.95)
+                prophet_model_full.fit(prophet_df_full)
+                future_forecast = prophet_model_full.make_future_dataframe(periods=forecast_steps, freq='B')
+                forecast_future = prophet_model_full.predict(future_forecast)
+                
+                fig_prophet = go.Figure()
+                fig_prophet.add_trace(go.Scatter(x=forecast_future['ds'], y=forecast_future['yhat_lower'], mode='lines', name='Lower Bound', line=dict(width=0), showlegend=False))
+                fig_prophet.add_trace(go.Scatter(x=forecast_future['ds'], y=forecast_future['yhat_upper'], mode='lines', name='Upper Bound', fill='tonexty', fillcolor='rgba(152, 251, 152, 0.4)', line=dict(width=0)))
+                fig_prophet.add_trace(go.Scatter(x=prophet_df_full['ds'], y=prophet_df_full['y'], mode='lines', name='Historical Data', line=dict(color='royalblue')))
+                fig_prophet.add_trace(go.Scatter(x=forecast_future['ds'], y=forecast_future['yhat'], mode='lines', name='Prophet Forecast', line=dict(color='green', dash='dash')))
+                fig_prophet.update_layout(title=f'Prophet {ticker} Price Forecast', xaxis_title='Date', yaxis_title='Close Price (USD)', template='plotly_dark')
+                st.plotly_chart(fig_prophet, use_container_width=True)
+
+                with st.expander("See Prophet Forecast Components"):
+                    fig_prophet_components = prophet_model_full.plot_components(forecast_future)
+                    st.pyplot(fig_prophet_components)
+
+            elif model_choice == 'LSTM':
+                scaler = MinMaxScaler(feature_range=(0, 1))
+                scaled_data = scaler.fit_transform(df['Close'].values.reshape(-1, 1))
+
+                def create_dataset(dataset, time_step=1):
+                    dataX, dataY = [], []
+                    for i in range(len(dataset) - time_step):
+                        a = dataset[i:(i + time_step), 0]
+                        dataX.append(a)
+                        dataY.append(dataset[i + time_step, 0])
+                    return np.array(dataX), np.array(dataY)
+                
+                train_data_scaled = scaled_data[0:train_size]
+                test_data_scaled = scaled_data[train_size - time_step:]
+
+                X_train, y_train = create_dataset(train_data_scaled, time_step)
+                X_test, y_test = create_dataset(test_data_scaled, time_step)
+                
+                X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
+                X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+                
+                model_lstm = Sequential()
+                model_lstm.add(LSTM(50, return_sequences=True, input_shape=(time_step, 1)))
+                model_lstm.add(LSTM(50, return_sequences=False))
+                model_lstm.add(Dense(25))
+                model_lstm.add(Dense(1))
+                model_lstm.compile(optimizer='adam', loss='mean_squared_error')
+                model_lstm.fit(X_train, y_train, batch_size=64, epochs=10, verbose=0)
+                
+                test_predictions_scaled = model_lstm.predict(X_test)
+                test_predictions_lstm = scaler.inverse_transform(test_predictions_scaled)
+                y_test_actual = scaler.inverse_transform(y_test.reshape(-1, 1))
+
+                mse = mean_squared_error(y_test_actual, test_predictions_lstm)
+                rmse = np.sqrt(mse)
+                accuracy_metric['LSTM'] = {'MSE': mse, 'RMSE': rmse}
+
+                current_input_sequence_scaled = list(scaled_data[-time_step:].flatten())
+                predictions_scaled = []
+                for i in range(forecast_steps):
+                    x_input = np.array(current_input_sequence_scaled).reshape(1, time_step, 1)
+                    yhat_scaled = model_lstm.predict(x_input, verbose=0)[0, 0]
+                    predictions_scaled.append(yhat_scaled)
+                    current_input_sequence_scaled.append(yhat_scaled)
+                    current_input_sequence_scaled = current_input_sequence_scaled[1:]
+                
+                predictions_lstm = scaler.inverse_transform(np.array(predictions_scaled).reshape(-1, 1))
+                last_historical_date = df.index[-1]
+                forecast_index = pd.date_range(start=last_historical_date + pd.Timedelta(days=1), periods=len(predictions_lstm), freq='B')
+                forecast_df = pd.DataFrame({'Forecast': predictions_lstm.flatten()}, index=forecast_index)
+
+                fig_lstm = go.Figure()
+                fig_lstm.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Historical Data', line=dict(color='royalblue')))
+                fig_lstm.add_trace(go.Scatter(x=forecast_df.index, y=forecast_df['Forecast'], mode='lines', name='LSTM Forecast', line=dict(color='purple', dash='dash')))
+                fig_lstm.update_layout(title=f'LSTM {ticker} Price Forecast', xaxis_title='Date', yaxis_title='Close Price (USD)', template='plotly_dark')
+                st.plotly_chart(fig_lstm, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"An error occurred during forecasting: {e}")
+            import traceback
+            st.text(traceback.format_exc())
+
+    st.markdown("---")
+    st.subheader(f'Model Accuracy on Test Data (Last 20% of the {ticker} dataset)')
+    st.markdown("Metrics are calculated by training the model on 80% of the data and predicting on the remaining 20%.")
+    
+    if model_choice in accuracy_metric:
+        st.markdown(f"**{model_choice} Metrics:**")
+        st.write(f"Mean Squared Error (MSE): **{accuracy_metric[model_choice]['MSE']:.2f}**")
+        st.write(f"Root Mean Squared Error (RMSE): **${accuracy_metric[model_choice]['RMSE']:.2f}**")
+    else:
+        st.warning("Accuracy metrics could not be calculated for this model.")
+
+st.sidebar.success('App created by a fellow data enthusiast!')
