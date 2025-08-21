@@ -235,3 +235,4 @@ if st.sidebar.button('Generate Forecast'):
         st.warning("Accuracy metrics could not be calculated for this model.")
 
 st.sidebar.success('App created by a fellow data enthusiast!')
+#ended
