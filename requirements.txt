@@ -1,11 +1,10 @@
 streamlit
 pandas
 numpy
-plotly
+requests
+alpha_vantage
+scikit-learn
 prophet
 statsmodels
 tensorflow
-scikit-learn
-yfinance==0.2.38
-requests==2.32.5 
-backoff==2.2.1
+plotly
