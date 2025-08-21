@@ -9,7 +9,7 @@ import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
-import yfinance as yf  # <-- IMPORT yfinance
+import yfinance as yf # <-- IMPORT yfinance
 from datetime import date, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
@@ -148,13 +148,22 @@ if st.sidebar.button('Generate Forecast'):
                 st.plotly_chart(fig_prophet, use_container_width=True)
 
                 with st.expander("See Prophet Forecast Components"):
-                    fig_prophet_components = prophet_model_full.plot_components(forecast_future)
-                    st.pyplot(fig_prophet_components)
+                    # Prophet plot_components returns a matplotlib figure, so we need to use st.pyplot
+                    st.pyplot(prophet_model_full.plot_components(forecast_future))
 
             elif model_choice == 'LSTM':
+                # --- CORRECTED CODE FOR LSTM: AVOID DATA LEAKAGE ---
+                # 1. Separate training and testing data before scaling
+                train_data_full = df.iloc[:train_size]['Close'].values.reshape(-1, 1)
+                test_data_full = df.iloc[train_size:]['Close'].values.reshape(-1, 1)
+                
+                # 2. Fit the scaler ONLY on the training data
                 scaler = MinMaxScaler(feature_range=(0, 1))
-                scaled_data = scaler.fit_transform(df['Close'].values.reshape(-1, 1))
-
+                train_data_scaled = scaler.fit_transform(train_data_full)
+                
+                # 3. Transform both train and test data using the scaler fitted on the training set
+                test_data_scaled = scaler.transform(test_data_full)
+                
                 def create_dataset(dataset, time_step=1):
                     dataX, dataY = [], []
                     for i in range(len(dataset) - time_step):
@@ -163,9 +172,6 @@ if st.sidebar.button('Generate Forecast'):
                         dataY.append(dataset[i + time_step, 0])
                     return np.array(dataX), np.array(dataY)
                 
-                train_data_scaled = scaled_data[0:train_size]
-                test_data_scaled = scaled_data[train_size - time_step:]
-
                 X_train, y_train = create_dataset(train_data_scaled, time_step)
                 X_test, y_test = create_dataset(test_data_scaled, time_step)
                 
@@ -180,7 +186,7 @@ if st.sidebar.button('Generate Forecast'):
                 model_lstm.compile(optimizer='adam', loss='mean_squared_error')
                 model_lstm.fit(X_train, y_train, batch_size=64, epochs=10, verbose=0)
                 
-                test_predictions_scaled = model_lstm.predict(X_test)
+                test_predictions_scaled = model_lstm.predict(X_test, verbose=0)
                 test_predictions_lstm = scaler.inverse_transform(test_predictions_scaled)
                 y_test_actual = scaler.inverse_transform(y_test.reshape(-1, 1))
 
@@ -188,8 +194,12 @@ if st.sidebar.button('Generate Forecast'):
                 rmse = np.sqrt(mse)
                 accuracy_metric['LSTM'] = {'MSE': mse, 'RMSE': rmse}
 
-                current_input_sequence_scaled = list(scaled_data[-time_step:].flatten())
+                # --- Continue with the forecast on the full data set ---
+                # Use a combined dataset for future predictions to get the most up-to-date model
+                scaled_data_full = scaler.fit_transform(df['Close'].values.reshape(-1, 1))
+                current_input_sequence_scaled = list(scaled_data_full[-time_step:].flatten())
                 predictions_scaled = []
+                
                 for i in range(forecast_steps):
                     x_input = np.array(current_input_sequence_scaled).reshape(1, time_step, 1)
                     yhat_scaled = model_lstm.predict(x_input, verbose=0)[0, 0]
