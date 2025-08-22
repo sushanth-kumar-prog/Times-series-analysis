@@ -9,7 +9,7 @@ import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
-from yahoofinancials import YahooFinancials # <-- NEW LIBRARY
+import yfinance as yf
 from datetime import date, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
@@ -32,41 +32,26 @@ end_date = st.sidebar.date_input('End Date', today)
 start_date = st.sidebar.date_input('Start Date', end_date - timedelta(days=365*5))
 
 # --- Data Loading ---
-if st.sidebar.button('Reload Data'):
-    st.experimental_rerun()
-
-# Note: We are not using st.cache_data here to ensure we bypass any potential caching issues
+@st.cache_data
 def load_data(ticker, start, end):
-    """
-    Loads stock data using the YahooFinancials library, which is a robust alternative.
-    """
-    st.write(f"Attempting to fetch data for {ticker} from {start} to {end}...")
     try:
-        yahoo_financials = YahooFinancials(ticker)
-        data = yahoo_financials.get_historical_price_data(
-            start_date=start.strftime('%Y-%m-%d'),
-            end_date=end.strftime('%Y-%m-%d'),
-            time_interval='daily'
-        )
-        
-        if 'prices' not in data or not data['prices']:
-            st.error(f"No data found for ticker: {ticker}. The ticker may be invalid or delisted.")
-            st.write("Please check the ticker symbol or your internet connection.")
+        # Download data using yfinance
+        data = yf.download(ticker, start=start, end=end, progress=False)
+        if data.empty:
+            st.error(f"No data found for ticker: {ticker}. Please check the ticker symbol and date range.")
             return pd.DataFrame()
+
+        # Fix for Plotly ValueError: Flatten multi-level columns if they exist
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = ['_'.join(col).strip() for col in data.columns.values]
+            # Rename the appropriate column to 'Close' for consistency
+            data = data.rename(columns={f'Close_{ticker}': 'Close'})
+            # Drop unnecessary columns to avoid errors
+            data = data[['Close']].copy()
         
-        # Parse the JSON data into a pandas DataFrame
-        df = pd.DataFrame(data['prices'])
-        df = df[['formatted_date', 'close']]
-        df.columns = ['Date', 'Close']
-        df['Date'] = pd.to_datetime(df['Date'])
-        df = df.set_index('Date')
-        
-        st.write("Data fetched and processed successfully!")
-        return df[['Close']].copy()
-        
+        return data[['Close']].copy()
     except Exception as e:
-        st.error(f"An error occurred while fetching data from YahooFinancials: {e}")
-        st.write("Please check your internet connection or try again later.")
+        st.error(f"An error occurred while fetching data: {e}")
         return pd.DataFrame()
 
 df = load_data(ticker, start_date, end_date)
@@ -94,11 +79,13 @@ forecast_steps = st.sidebar.slider('Select number of days to forecast', 30, 365,
 
 # --- Forecasting Button ---
 if st.sidebar.button('Generate Forecast'):
+    # Check for sufficient data for LSTM's time_step
     time_step = 60
-    if len(df) < time_step + 1 and model_choice == 'LSTM':
+    if len(df) < time_step + 1:
         st.error(f"Not enough historical data to train the LSTM model. It requires at least {time_step + 1} data points. Your dataset has {len(df)}.")
         st.stop()
 
+    # Split data into training and testing sets (80/20 split)
     train_size = int(len(df) * 0.8)
     train_data, test_data = df[0:train_size], df[train_size:len(df)]
 
@@ -108,41 +95,70 @@ if st.sidebar.button('Generate Forecast'):
     with st.spinner(f'Generating {model_choice} forecast...'):
         try:
             if model_choice == 'ARIMA':
-                model_test = ARIMA(train_data['Close'], order=(5, 1, 0))
-                model_test_fit = model_test.fit()
-                test_predictions = model_test_fit.forecast(steps=len(test_data))
-                
-                mse = mean_squared_error(test_data['Close'], test_predictions)
-                rmse = np.sqrt(mse)
-                accuracy_metric['ARIMA'] = {'MSE': mse, 'RMSE': rmse}
+                history = [x for x in train_data['Close']]
+                test_predictions = []
+                for t in range(len(test_data)):
+                    try:
+                        model = ARIMA(history, order=(5, 1, 0))
+                        model_fit = model.fit()
+                        output = model_fit.forecast()
+                        yhat = output[0]
+                        test_predictions.append(yhat)
+                        history.append(test_data['Close'].iloc[t])
+                    except Exception as e:
+                        st.warning(f"ARIMA fitting for test data failed at step {t}: {e}.")
+                        test_predictions.append(np.nan)
+                        break
 
-                model_full = ARIMA(df['Close'], order=(5, 1, 0))
-                model_full_fit = model_full.fit()
-                future_predictions = model_full_fit.forecast(steps=forecast_steps)
+                if test_predictions:
+                    mse = mean_squared_error(test_data['Close'][:len(test_predictions)], test_predictions)
+                    rmse = np.sqrt(mse)
+                    accuracy_metric['ARIMA'] = {'MSE': mse, 'RMSE': rmse}
+
+                future_history = [x for x in df['Close']]
+                future_predictions = []
+                for t in range(forecast_steps):
+                    try:
+                        model = ARIMA(future_history, order=(5,1,0))
+                        model_fit = model.fit()
+                        output = model_fit.forecast()
+                        yhat = output[0]
+                        future_predictions.append(yhat)
+                        future_history.append(yhat)
+                    except Exception as e:
+                        st.warning(f"ARIMA future forecasting failed at step {t}: {e}. Stopping forecast.")
+                        future_predictions.append(np.nan)
+                        break
                 
+                valid_future_predictions = [p for p in future_predictions if not np.isnan(p)]
                 last_historical_date = df.index[-1]
-                forecast_index = pd.date_range(start=last_historical_date + pd.Timedelta(days=1), periods=forecast_steps, freq='B')
-                forecast_df = pd.DataFrame({'Forecast': future_predictions}, index=forecast_index)
-                
-                fig_arima = go.Figure()
-                fig_arima.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Historical Data', line=dict(color='royalblue')))
-                fig_arima.add_trace(go.Scatter(x=forecast_df.index, y=forecast_df['Forecast'], mode='lines', name='ARIMA Forecast', line=dict(color='red', dash='dash')))
-                fig_arima.update_layout(title=f'ARIMA {ticker} Price Forecast', xaxis_title='Date', yaxis_title='Close Price (USD)', template='plotly_dark')
-                st.plotly_chart(fig_arima, use_container_width=True)
+                forecast_index = pd.date_range(start=last_historical_date + pd.Timedelta(days=1), periods=len(valid_future_predictions), freq='B')
+
+                if valid_future_predictions:
+                    forecast_df = pd.DataFrame({'Forecast': valid_future_predictions}, index=forecast_index)
+
+                    fig_arima = go.Figure()
+                    fig_arima.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Historical Data', line=dict(color='royalblue')))
+                    fig_arima.add_trace(go.Scatter(x=forecast_df.index, y=forecast_df['Forecast'], mode='lines', name='ARIMA Forecast', line=dict(color='red', dash='dash')))
+                    fig_arima.update_layout(title=f'ARIMA {ticker} Price Forecast', xaxis_title='Date', yaxis_title='Close Price (USD)', template='plotly_dark')
+                    st.plotly_chart(fig_arima, use_container_width=True)
+                else:
+                    st.error("ARIMA forecast could not be generated.")
                 
             elif model_choice == 'Prophet':
                 prophet_df_train = train_data.reset_index().rename(columns={'Date': 'ds', 'Close': 'y'})
                 prophet_model_train = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True, interval_width=0.95)
                 prophet_model_train.fit(prophet_df_train)
 
-                future_test = prophet_model_train.make_future_dataframe(periods=len(test_data), freq='B')
+                future_test = prophet_model_train.make_future_dataframe(periods=len(test_data), freq='B', include_history=False)
                 forecast_test = prophet_model_train.predict(future_test)
-                test_predictions = forecast_test['yhat'].values[-len(test_data):]
+                test_predictions = forecast_test['yhat'].values
                 
                 mse = mean_squared_error(test_data['Close'], test_predictions)
                 rmse = np.sqrt(mse)
                 accuracy_metric['Prophet'] = {'MSE': mse, 'RMSE': rmse}
 
+                # Instantiate a new Prophet object for the full forecast to avoid the "fit once" error
                 prophet_df_full = df.reset_index().rename(columns={'Date': 'ds', 'Close': 'y'})
                 prophet_model_full = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True, interval_width=0.95)
                 prophet_model_full.fit(prophet_df_full)
@@ -158,16 +174,14 @@ if st.sidebar.button('Generate Forecast'):
                 st.plotly_chart(fig_prophet, use_container_width=True)
 
                 with st.expander("See Prophet Forecast Components"):
-                    st.pyplot(prophet_model_full.plot_components(forecast_future))
+                    fig_prophet_components = prophet_model_full.plot_components(forecast_future)
+                    st.pyplot(fig_prophet_components)
 
             elif model_choice == 'LSTM':
-                train_data_full = df.iloc[:train_size]['Close'].values.reshape(-1, 1)
-                test_data_full = df.iloc[train_size:]['Close'].values.reshape(-1, 1)
-                
                 scaler = MinMaxScaler(feature_range=(0, 1))
-                train_data_scaled = scaler.fit_transform(train_data_full)
-                test_data_scaled = scaler.transform(test_data_full)
-                
+                scaled_data_train = scaler.fit_transform(train_data)
+                scaled_data_test = scaler.transform(test_data)
+
                 def create_dataset(dataset, time_step=1):
                     dataX, dataY = [], []
                     for i in range(len(dataset) - time_step):
@@ -176,38 +190,52 @@ if st.sidebar.button('Generate Forecast'):
                         dataY.append(dataset[i + time_step, 0])
                     return np.array(dataX), np.array(dataY)
                 
-                X_train, y_train = create_dataset(train_data_scaled, time_step)
-                X_test, y_test = create_dataset(test_data_scaled, time_step)
-                
+                X_train, y_train = create_dataset(scaled_data_train, time_step)
                 X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
-                X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
                 
-                model_lstm = Sequential()
-                model_lstm.add(LSTM(50, return_sequences=True, input_shape=(time_step, 1)))
-                model_lstm.add(LSTM(50, return_sequences=False))
-                model_lstm.add(Dense(25))
-                model_lstm.add(Dense(1))
-                model_lstm.compile(optimizer='adam', loss='mean_squared_error')
-                model_lstm.fit(X_train, y_train, batch_size=64, epochs=10, verbose=0)
+                model_lstm_accuracy = Sequential()
+                model_lstm_accuracy.add(LSTM(50, return_sequences=True, input_shape=(time_step, 1)))
+                model_lstm_accuracy.add(LSTM(50, return_sequences=False))
+                model_lstm_accuracy.add(Dense(25))
+                model_lstm_accuracy.add(Dense(1))
+                model_lstm_accuracy.compile(optimizer='adam', loss='mean_squared_error')
+                model_lstm_accuracy.fit(X_train, y_train, batch_size=64, epochs=10, verbose=0)
                 
-                test_predictions_scaled = model_lstm.predict(X_test, verbose=0)
-                test_predictions_lstm = scaler.inverse_transform(test_predictions_scaled)
-                y_test_actual = scaler.inverse_transform(y_test.reshape(-1, 1))
+                test_input_sequence = list(scaled_data_train[-time_step:].flatten())
+                test_predictions_scaled = []
+                for t in range(len(test_data)):
+                    x_input = np.array(test_input_sequence).reshape(1, time_step, 1)
+                    yhat_scaled = float(model_lstm_accuracy.predict(x_input, verbose=0)[0, 0])
+                    test_predictions_scaled.append(yhat_scaled)
+                    test_input_sequence.append(yhat_scaled)
+                    test_input_sequence = test_input_sequence[1:]
 
-                mse = mean_squared_error(y_test_actual, test_predictions_lstm)
+                test_predictions_lstm = scaler.inverse_transform(np.array(test_predictions_scaled).reshape(-1, 1))
+                
+                mse = mean_squared_error(test_data['Close'], test_predictions_lstm.flatten())
                 rmse = np.sqrt(mse)
                 accuracy_metric['LSTM'] = {'MSE': mse, 'RMSE': rmse}
 
-                scaled_data_full = scaler.fit_transform(df['Close'].values.reshape(-1, 1))
-                current_input_sequence_scaled = list(scaled_data_full[-time_step:].flatten())
+                scaled_data_full = scaler.fit_transform(df)
+                X_full, y_full = create_dataset(scaled_data_full, time_step)
+                X_full = X_full.reshape(X_full.shape[0], X_full.shape[1], 1)
+
+                model_lstm_forecast = Sequential()
+                model_lstm_forecast.add(LSTM(50, return_sequences=True, input_shape=(time_step, 1)))
+                model_lstm_forecast.add(LSTM(50, return_sequences=False))
+                model_lstm_forecast.add(Dense(25))
+                model_lstm_forecast.add(Dense(1))
+                model_lstm_forecast.compile(optimizer='adam', loss='mean_squared_error')
+                model_lstm_forecast.fit(X_full, y_full, batch_size=64, epochs=10, verbose=0)
+
+                current_input_sequence = list(scaled_data_full[-time_step:].flatten())
                 predictions_scaled = []
-                
                 for i in range(forecast_steps):
-                    x_input = np.array(current_input_sequence_scaled).reshape(1, time_step, 1)
-                    yhat_scaled = model_lstm.predict(x_input, verbose=0)[0, 0]
+                    x_input = np.array(current_input_sequence).reshape(1, time_step, 1)
+                    yhat_scaled = float(model_lstm_forecast.predict(x_input, verbose=0)[0, 0])
                     predictions_scaled.append(yhat_scaled)
-                    current_input_sequence_scaled.append(yhat_scaled)
-                    current_input_sequence_scaled = current_input_sequence_scaled[1:]
+                    current_input_sequence.append(yhat_scaled)
+                    current_input_sequence = current_input_sequence[1:]
                 
                 predictions_lstm = scaler.inverse_transform(np.array(predictions_scaled).reshape(-1, 1))
                 last_historical_date = df.index[-1]
@@ -222,9 +250,8 @@ if st.sidebar.button('Generate Forecast'):
 
         except Exception as e:
             st.error(f"An error occurred during forecasting: {e}")
-            import traceback
-            st.text(traceback.format_exc())
-
+            st.warning(f"Please check your data and model parameters. For LSTM, ensure enough historical data is available (e.g., more than {time_step} days).")
+    
     st.markdown("---")
     st.subheader(f'Model Accuracy on Test Data (Last 20% of the {ticker} dataset)')
     st.markdown("Metrics are calculated by training the model on 80% of the data and predicting on the remaining 20%.")
@@ -236,4 +263,4 @@ if st.sidebar.button('Generate Forecast'):
     else:
         st.warning("Accuracy metrics could not be calculated for this model.")
 
-st.sidebar.success('App created by a fellow data enthusiast!')
+st.success('End of dashboard.')
