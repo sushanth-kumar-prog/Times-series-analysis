@@ -1,4 +1,5 @@
 # app.py
+# Version 1.1 - Forcing a deployment refresh
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -55,7 +56,7 @@ def load_stock_data(ticker, start, end):
             raise ValueError("No data found for the given ticker and date range.")
         df.index = pd.to_datetime(df.index)
         
-        # ✅ THIS IS THE FIX: Remove timezone information for Prophet compatibility
+        # FIX: Remove timezone information for Prophet compatibility
         df.index = df.index.tz_localize(None)
         
         return df[['Close']]
