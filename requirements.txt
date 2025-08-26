@@ -1,6 +1,7 @@
 numpy==1.26.4
 pandas==2.2.2
 plotly==5.22.0
+cmdstanpy==1.2.4
 prophet==1.1.5
 scikit-learn==1.5.0
 statsmodels==0.14.2
