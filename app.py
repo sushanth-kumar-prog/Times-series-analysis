@@ -1,12 +1,11 @@
 # app.py
-# Version 1.3 - Final robust data fetching
+# Version 1.1 - Forcing a deployment refresh
 import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import date, timedelta
 from sklearn.metrics import mean_squared_error
 import yfinance as yf
-import requests  # <-- Add this import
 
 # Models
 import pmdarima as pm
@@ -48,21 +47,16 @@ run_lstm = st.sidebar.checkbox("Run LSTM (Can be slow)", True)
 @st.cache_data
 def load_stock_data(ticker, start, end):
     """
-    Loads data using the most robust yfinance method with a session.
+    Loads split-adjusted stock data from Yahoo Finance and removes timezone.
     """
     try:
-        # ✅ THE FINAL FIX: Create a session with a browser User-Agent
-        session = requests.Session()
-        session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        
-        # Pass the session to the Ticker object
-        ticker_obj = yf.Ticker(ticker, session=session)
+        ticker_obj = yf.Ticker(ticker)
         df = ticker_obj.history(start=start, end=end)
-        
         if df.empty:
             raise ValueError("No data found for the given ticker and date range.")
         df.index = pd.to_datetime(df.index)
         
+        # FIX: Remove timezone information for Prophet compatibility
         df.index = df.index.tz_localize(None)
         
         return df[['Close']]
@@ -76,7 +70,6 @@ def load_stock_data(ticker, start, end):
 data = load_stock_data(ticker, str(start_date), str(end_date))
 
 if data is not None:
-    # ... (The rest of your code remains exactly the same) ...
     st.subheader(f"📊 Historical Prices for {ticker} (Adjusted Close)")
     st.line_chart(data["Close"])
 
@@ -102,9 +95,11 @@ if data is not None:
                         suppress_warnings=True,
                         error_action="ignore"
                     )
+                    # Predict on the test set horizon
                     test_pred, conf_int = arima_model.predict(n_periods=len(test_df), return_conf_int=True)
                     metrics["ARIMA"] = {"RMSE": np.sqrt(mean_squared_error(test_df["Close"], test_pred))}
                     
+                    # Retrain on full data for future forecast
                     full_arima_model = pm.auto_arima(data["Close"], seasonal=False, stepwise=True, suppress_warnings=True, error_action="ignore")
                     future_pred = full_arima_model.predict(n_periods=forecast_days)
                     forecasts["ARIMA"] = future_pred
@@ -120,11 +115,13 @@ if data is not None:
                     prophet_model = Prophet(daily_seasonality=True)
                     prophet_model.fit(prophet_train_df)
 
+                    # Predict on the test set horizon
                     test_future = prophet_model.make_future_dataframe(periods=len(test_df), freq='B')
                     test_pred_df = prophet_model.predict(test_future)
                     test_pred = test_pred_df['yhat'][-len(test_df):]
                     metrics["Prophet"] = {"RMSE": np.sqrt(mean_squared_error(test_df["Close"], test_pred))}
                     
+                    # Retrain on full data for future forecast
                     full_prophet_df = data.reset_index().rename(columns={"Date": "ds", "Close": "y"})
                     full_prophet_model = Prophet(daily_seasonality=True).fit(full_prophet_df)
                     future_df = full_prophet_model.make_future_dataframe(periods=forecast_days, freq='B')
@@ -138,6 +135,7 @@ if data is not None:
         if run_lstm:
             with st.spinner("Fitting LSTM model... (this may take a moment)"):
                 try:
+                    # Scale data based ONLY on the training set
                     scaler = MinMaxScaler(feature_range=(0, 1))
                     train_scaled = scaler.fit_transform(train_df)
                     
@@ -155,6 +153,7 @@ if data is not None:
                     X_train, y_train = create_sequences(train_scaled, window_size)
                     X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
 
+                    # Build and train the LSTM model
                     lstm_model = Sequential([
                         LSTM(50, return_sequences=True, input_shape=(X_train.shape[1], 1)),
                         LSTM(50, return_sequences=False),
@@ -164,6 +163,7 @@ if data is not None:
                     lstm_model.compile(optimizer='adam', loss='mean_squared_error')
                     lstm_model.fit(X_train, y_train, batch_size=32, epochs=20, verbose=0)
                     
+                    # Walk-forward prediction on the test set
                     inputs = data['Close'][len(data) - len(test_df) - window_size:].values
                     inputs = inputs.reshape(-1,1)
                     inputs = scaler.transform(inputs)
@@ -178,6 +178,7 @@ if data is not None:
                     test_pred = scaler.inverse_transform(test_pred_scaled).flatten()
                     metrics["LSTM"] = {"RMSE": np.sqrt(mean_squared_error(test_df["Close"], test_pred))}
                     
+                    # Future forecast using the last known data
                     last_sequence_full_data = data['Close'][-window_size:].values.reshape(-1, 1)
                     last_sequence_scaled = scaler.transform(last_sequence_full_data)
 
@@ -201,6 +202,7 @@ if data is not None:
             st.subheader("📈 Forecast vs Actuals")
             fig = go.Figure()
 
+            # Plot training and testing data
             fig.add_trace(go.Scatter(x=train_df.index, y=train_df['Close'], mode='lines', name='Training Data', line=dict(color='royalblue')))
             fig.add_trace(go.Scatter(x=test_df.index, y=test_df['Close'], mode='lines', name='Actual Test Data', line=dict(color='orange')))
             
