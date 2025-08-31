@@ -1,12 +1,9 @@
-# app.py
-# Version 1.3 - Final robust data fetching
 import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import date, timedelta
 from sklearn.metrics import mean_squared_error
-import yfinance as yf
-import requests  # <-- Add this import
+from polygon import RESTClient # <-- Import for Polygon
 
 # Models
 import pmdarima as pm
@@ -30,6 +27,10 @@ st.markdown("Predict future stock prices using Auto-ARIMA, Prophet, and LSTM wit
 # ---------------------------------
 st.sidebar.header("⚙️ Input Parameters")
 ticker = st.sidebar.text_input("Stock Ticker", "GOOGL").upper()
+
+# ✅ YOUR API KEY HAS BEEN ADDED HERE
+POLYGON_API_KEY = "nd8GPrvHgo_5bXBZniizp3alkYdFGbOX"
+
 end_date = st.sidebar.date_input("End Date", date.today())
 start_date = st.sidebar.date_input("Start Date", end_date - timedelta(days=365*5))
 
@@ -43,68 +44,58 @@ run_prophet = st.sidebar.checkbox("Run Prophet", True)
 run_lstm = st.sidebar.checkbox("Run LSTM (Can be slow)", True)
 
 # ---------------------------------
-# Caching Functions for Performance
+# Data Loading Function
 # ---------------------------------
 @st.cache_data
-def load_stock_data(ticker, start, end):
+def load_stock_data(api_key, ticker, start, end):
     """
-    Loads data using the most robust yfinance method with a session.
+    Loads split-adjusted stock data from Polygon.io.
     """
+    if not api_key or api_key == "YOUR_POLYGON_API_KEY":
+        st.error("Polygon.io API key is not set. Please add your key to the script.")
+        return None
     try:
-        # ✅ THE FINAL FIX: Create a session with a browser User-Agent
-        session = requests.Session()
-        session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        client = RESTClient(api_key)
+        # Fetch adjusted daily bars for the given ticker
+        aggs = client.get_aggs(ticker=ticker, multiplier=1, timespan="day", from_=start, to=end, adjusted=True, limit=50000)
         
-        # Pass the session to the Ticker object
-        ticker_obj = yf.Ticker(ticker, session=session)
-        df = ticker_obj.history(start=start, end=end)
-        
-        if df.empty:
-            raise ValueError("No data found for the given ticker and date range.")
-        df.index = pd.to_datetime(df.index)
-        
-        df.index = df.index.tz_localize(None)
+        if not aggs:
+            raise ValueError("No data found for the given ticker and date range from Polygon.io.")
+            
+        df = pd.DataFrame(aggs)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+        df.rename(columns={'close': 'Close'}, inplace=True)
         
         return df[['Close']]
+
     except Exception as e:
-        st.error(f"Failed to load data for {ticker}: {e}")
+        st.error(f"Failed to load data for {ticker} from Polygon.io: {e}")
         return None
 
 # ---------------------------------
 # Main App Logic
 # ---------------------------------
-data = load_stock_data(ticker, str(start_date), str(end_date))
+data = load_stock_data(POLYGON_API_KEY, ticker, str(start_date), str(end_date))
 
 if data is not None:
-    # ... (The rest of your code remains exactly the same) ...
     st.subheader(f"📊 Historical Prices for {ticker} (Adjusted Close)")
     st.line_chart(data["Close"])
 
-    # --- Train/Test Split ---
     split_index = int(len(data) * train_ratio)
     train_df, test_df = data.iloc[:split_index], data.iloc[split_index:]
     st.write(f"Training set: {len(train_df)} days | Test set: {len(test_df)} days")
 
-    # --- Model Training & Forecasting ---
     forecasts = {}
     metrics = {}
 
     if st.button("🚀 Generate Forecast"):
-        
-        # --- Auto-ARIMA ---
         if run_arima:
             with st.spinner("Fitting Auto-ARIMA model..."):
                 try:
-                    arima_model = pm.auto_arima(
-                        train_df["Close"], 
-                        seasonal=False, 
-                        stepwise=True, 
-                        suppress_warnings=True,
-                        error_action="ignore"
-                    )
-                    test_pred, conf_int = arima_model.predict(n_periods=len(test_df), return_conf_int=True)
+                    arima_model = pm.auto_arima(train_df["Close"], seasonal=False, stepwise=True, suppress_warnings=True, error_action="ignore")
+                    test_pred, _ = arima_model.predict(n_periods=len(test_df), return_conf_int=True)
                     metrics["ARIMA"] = {"RMSE": np.sqrt(mean_squared_error(test_df["Close"], test_pred))}
-                    
                     full_arima_model = pm.auto_arima(data["Close"], seasonal=False, stepwise=True, suppress_warnings=True, error_action="ignore")
                     future_pred = full_arima_model.predict(n_periods=forecast_days)
                     forecasts["ARIMA"] = future_pred
@@ -112,20 +103,17 @@ if data is not None:
                 except Exception as e:
                     st.error(f"ARIMA failed: {e}")
 
-        # --- Prophet ---
         if run_prophet:
             with st.spinner("Fitting Prophet model..."):
                 try:
-                    prophet_train_df = train_df.reset_index().rename(columns={"Date": "ds", "Close": "y"})
-                    prophet_model = Prophet(daily_seasonality=True)
-                    prophet_model.fit(prophet_train_df)
-
+                    # Note the index name change for Prophet
+                    prophet_train_df = train_df.reset_index().rename(columns={"timestamp": "ds", "Close": "y"})
+                    prophet_model = Prophet(daily_seasonality=True).fit(prophet_train_df)
                     test_future = prophet_model.make_future_dataframe(periods=len(test_df), freq='B')
                     test_pred_df = prophet_model.predict(test_future)
                     test_pred = test_pred_df['yhat'][-len(test_df):]
                     metrics["Prophet"] = {"RMSE": np.sqrt(mean_squared_error(test_df["Close"], test_pred))}
-                    
-                    full_prophet_df = data.reset_index().rename(columns={"Date": "ds", "Close": "y"})
+                    full_prophet_df = data.reset_index().rename(columns={"timestamp": "ds", "Close": "y"})
                     full_prophet_model = Prophet(daily_seasonality=True).fit(full_prophet_df)
                     future_df = full_prophet_model.make_future_dataframe(periods=forecast_days, freq='B')
                     future_pred_df = full_prophet_model.predict(future_df)
@@ -134,7 +122,6 @@ if data is not None:
                 except Exception as e:
                     st.error(f"Prophet failed: {e}")
         
-        # --- LSTM ---
         if run_lstm:
             with st.spinner("Fitting LSTM model... (this may take a moment)"):
                 try:
@@ -149,7 +136,7 @@ if data is not None:
                         return np.array(X), np.array(y)
                     
                     window_size = 60
-                    if len(train_scaled) < window_size:
+                    if len(train_scaled) <= window_size:
                         raise ValueError(f"Not enough training data ({len(train_scaled)} points) to create a sequence of length {window_size}.")
 
                     X_train, y_train = create_sequences(train_scaled, window_size)
@@ -164,8 +151,7 @@ if data is not None:
                     lstm_model.compile(optimizer='adam', loss='mean_squared_error')
                     lstm_model.fit(X_train, y_train, batch_size=32, epochs=20, verbose=0)
                     
-                    inputs = data['Close'][len(data) - len(test_df) - window_size:].values
-                    inputs = inputs.reshape(-1,1)
+                    inputs = data['Close'][len(data) - len(test_df) - window_size:].values.reshape(-1,1)
                     inputs = scaler.transform(inputs)
                     
                     X_test = []
@@ -196,11 +182,9 @@ if data is not None:
                 except Exception as e:
                     st.error(f"LSTM failed: {e}")
 
-        # --- Plotting Forecasts ---
         if forecasts:
             st.subheader("📈 Forecast vs Actuals")
             fig = go.Figure()
-
             fig.add_trace(go.Scatter(x=train_df.index, y=train_df['Close'], mode='lines', name='Training Data', line=dict(color='royalblue')))
             fig.add_trace(go.Scatter(x=test_df.index, y=test_df['Close'], mode='lines', name='Actual Test Data', line=dict(color='orange')))
             
@@ -210,16 +194,9 @@ if data is not None:
             for model_name, pred in forecasts.items():
                 fig.add_trace(go.Scatter(x=future_dates, y=pred, mode='lines', name=f'{model_name} Forecast', line=dict(color=colors[model_name], dash='dash')))
             
-            fig.update_layout(
-                title=f'{ticker} Price Forecast',
-                xaxis_title='Date',
-                yaxis_title='Price (USD)',
-                template='plotly_dark',
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
+            fig.update_layout(title=f'{ticker} Price Forecast', xaxis_title='Date', yaxis_title='Price (USD)', template='plotly_dark', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             st.plotly_chart(fig, use_container_width=True)
 
-        # --- Display Metrics ---
         if metrics:
             st.subheader("📊 Model Performance on Test Set (RMSE)")
             metrics_df = pd.DataFrame(metrics).T
