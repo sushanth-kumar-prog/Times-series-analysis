@@ -1,9 +1,12 @@
+# app.py
+# Version 2.1 - Corrected Polygon.io library import
 import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import date, timedelta
 from sklearn.metrics import mean_squared_error
-from polygon import RESTClient # <-- Import for Polygon
+# ✅ CORRECTED IMPORT for the new library name
+from polygon import RESTClient 
 
 # Models
 import pmdarima as pm
@@ -28,7 +31,7 @@ st.markdown("Predict future stock prices using Auto-ARIMA, Prophet, and LSTM wit
 st.sidebar.header("⚙️ Input Parameters")
 ticker = st.sidebar.text_input("Stock Ticker", "GOOGL").upper()
 
-# ✅ YOUR API KEY HAS BEEN ADDED HERE
+# Your API Key from the previous step
 POLYGON_API_KEY = "nd8GPrvHgo_5bXBZniizp3alkYdFGbOX"
 
 end_date = st.sidebar.date_input("End Date", date.today())
@@ -55,8 +58,8 @@ def load_stock_data(api_key, ticker, start, end):
         st.error("Polygon.io API key is not set. Please add your key to the script.")
         return None
     try:
+        # The client usage is the same, which is good
         client = RESTClient(api_key)
-        # Fetch adjusted daily bars for the given ticker
         aggs = client.get_aggs(ticker=ticker, multiplier=1, timespan="day", from_=start, to=end, adjusted=True, limit=50000)
         
         if not aggs:
@@ -79,6 +82,7 @@ def load_stock_data(api_key, ticker, start, end):
 data = load_stock_data(POLYGON_API_KEY, ticker, str(start_date), str(end_date))
 
 if data is not None:
+    # The rest of your code remains the same and is correct
     st.subheader(f"📊 Historical Prices for {ticker} (Adjusted Close)")
     st.line_chart(data["Close"])
 
@@ -106,7 +110,6 @@ if data is not None:
         if run_prophet:
             with st.spinner("Fitting Prophet model..."):
                 try:
-                    # Note the index name change for Prophet
                     prophet_train_df = train_df.reset_index().rename(columns={"timestamp": "ds", "Close": "y"})
                     prophet_model = Prophet(daily_seasonality=True).fit(prophet_train_df)
                     test_future = prophet_model.make_future_dataframe(periods=len(test_df), freq='B')
