@@ -1,12 +1,11 @@
 # app.py
-# Version 2.1 - Corrected Polygon.io library import
+# Version 2.2 - Adjusted for Polygon.io 2-year data limit
 import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import date, timedelta
 from sklearn.metrics import mean_squared_error
-# ✅ CORRECTED IMPORT for the new library name
-from polygon import RESTClient 
+from polygon import RESTClient
 
 # Models
 import pmdarima as pm
@@ -34,8 +33,12 @@ ticker = st.sidebar.text_input("Stock Ticker", "GOOGL").upper()
 # Your API Key from the previous step
 POLYGON_API_KEY = "nd8GPrvHgo_5bXBZniizp3alkYdFGbOX"
 
+# ✅ FIX 1: Change the default start date to be within the 2-year limit
 end_date = st.sidebar.date_input("End Date", date.today())
-start_date = st.sidebar.date_input("Start Date", end_date - timedelta(days=365*5))
+start_date = st.sidebar.date_input("Start Date", end_date - timedelta(days=365*1)) # Changed from 5 years to 1 year
+
+# ✅ FIX 2: Add an informative message about the data limit
+st.sidebar.info("Note: The free data source (Polygon.io) provides access to a maximum of 2 years of historical daily data.")
 
 train_ratio = st.sidebar.slider("Train/Test Split Ratio", 0.6, 0.95, 0.8, 0.05)
 forecast_days = st.sidebar.number_input("Days to Forecast into Future", min_value=7, max_value=365, value=30, step=7)
@@ -58,7 +61,6 @@ def load_stock_data(api_key, ticker, start, end):
         st.error("Polygon.io API key is not set. Please add your key to the script.")
         return None
     try:
-        # The client usage is the same, which is good
         client = RESTClient(api_key)
         aggs = client.get_aggs(ticker=ticker, multiplier=1, timespan="day", from_=start, to=end, adjusted=True, limit=50000)
         
