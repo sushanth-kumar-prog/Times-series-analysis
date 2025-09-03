@@ -27,7 +27,6 @@ Users input a stock ticker, fetch historical **adjusted close** data from **Poly
 
 <img src="assets/screenshot.PNG" alt="App Screenshot" width="900"/>
 
-*(If you don’t see an image, make sure `assets/screenshot.png` exists in your repo.)*
 
 ---
 
